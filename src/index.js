@@ -2,7 +2,8 @@
 const {promisify} = require('util');
 const path = require('path');
 const {createHash} = require('crypto');
-const {realpath, lstat, createReadStream, readdir} = require('fs');
+const {realpath, lstat, createReadStream, readdir, readFileSync} = require('fs');
+const {Readable} = require('stream');
 
 // Packages
 const url = require('fast-url-parser');
@@ -14,6 +15,7 @@ const bytes = require('bytes');
 const contentDisposition = require('content-disposition');
 const isPathInside = require('path-is-inside');
 const parseRange = require('range-parser');
+const marked = require('marked');
 
 // Other
 const directoryTemplate = require('./directory');
@@ -238,7 +240,11 @@ const getHeaders = async (handlers, config, current, absolutePath, stats) => {
 		const contentType = mime.contentType(base);
 
 		if (contentType) {
-			defaultHeaders['Content-Type'] = contentType;
+			if (absolutePath.endsWith('.md')) {
+				defaultHeaders['Content-Type'] = 'text/html; charset=utf-8';
+			} else {
+				defaultHeaders['Content-Type'] = contentType;
+			}
 		}
 	}
 
@@ -279,7 +285,7 @@ const getPossiblePaths = (relativePath, extension) => [
 ].filter(item => path.basename(item) !== extension);
 
 const findRelated = async (current, relativePath, rewrittenPath, originalStat) => {
-	const possible = rewrittenPath ? [rewrittenPath] : getPossiblePaths(relativePath, '.html');
+	const possible = rewrittenPath ? [rewrittenPath] : (getPossiblePaths(relativePath, '.html') || getPossiblePaths(relativePath, '.md'));
 
 	let stats = null;
 
@@ -725,7 +731,27 @@ module.exports = async (request, response, config = {}, methods = {}) => {
 	let stream = null;
 
 	try {
-		stream = await handlers.createReadStream(absolutePath, streamOpts);
+		if (absolutePath.endsWith('.md')) {
+			const markd = readFileSync(absolutePath, streamOpts);
+			const html = `<!DOCTYPE html>
+			<html lang="en">
+			<head>
+				<meta charset="UTF-8">
+				<meta name="viewport" content="width=device-width, initial-scale=1.0">
+				<title>${absolutePath.split('/')[absolutePath.split('/').length - 1]}</title>
+			</head>
+			<body>
+			${marked(Buffer.from(markd).toString('utf-8'))}
+			</body>
+			</html>
+			`;
+			const length = Buffer.byteLength(html, ['utf-8']);
+			streamOpts.start = 0;
+			streamOpts.end = length - 1;
+			stream = Readable.from([html], streamOpts);
+		} else {
+			stream = await handlers.createReadStream(absolutePath, streamOpts);
+		}
 	} catch (err) {
 		return internalError(absolutePath, response, acceptsJSON, current, handlers, config, err);
 	}
